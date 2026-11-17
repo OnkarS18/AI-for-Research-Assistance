@@ -159,7 +159,7 @@ def load_embeddings():
     )
 
 @st.cache_resource
-def load_llm():
+def load_llm(model_name="gemini-2.0-flash"):
     # Support both os.getenv and st.secrets (for Streamlit Cloud deployment)
     api_key = os.getenv("GOOGLE_API_KEY")
     if not api_key:
@@ -170,17 +170,16 @@ def load_llm():
 
     if api_key:
         return ChatGoogleGenerativeAI(
-            model="gemini-3.5-flash",
+            model=model_name,
             temperature=0,
             google_api_key=api_key
         )
     return ChatGoogleGenerativeAI(
-        model="gemini-3.5-flash",
+        model=model_name,
         temperature=0
     )
 
 embeddings = load_embeddings()
-llm = load_llm()
 
 def get_text(response):
     if isinstance(response.content, str):
@@ -196,6 +195,31 @@ def get_text(response):
                 text += str(item)
         return text
     return str(response.content)
+
+def generate_response(prompt, primary_model="gemini-2.0-flash"):
+    """
+    Invokes Gemini with automatic rate-limit (429) fallback across high-quota models.
+    """
+    models_to_try = [primary_model, "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
+    seen = set()
+    unique_models = [m for m in models_to_try if not (m in seen or seen.add(m))]
+
+    last_exception = None
+    for model_name in unique_models:
+        try:
+            llm_inst = load_llm(model_name)
+            response = llm_inst.invoke(prompt)
+            return get_text(response)
+        except Exception as e:
+            err_text = str(e)
+            if "429" in err_text or "RESOURCE_EXHAUSTED" in err_text or "quota" in err_text.lower():
+                last_exception = e
+                continue
+            else:
+                raise e
+
+    if last_exception:
+        raise last_exception
 
 # Initialize Session State
 if "messages" not in st.session_state:
@@ -218,7 +242,7 @@ st.markdown(
             Evidence-based clinical literature analysis, cross-paper synthesis, and RAG-powered querying.
         </div>
         <div class="hero-badges">
-            <span class="hero-badge">⚡ Gemini Flash LLM</span>
+            <span class="hero-badge">⚡ Gemini 2.0 Flash LLM</span>
             <span class="hero-badge">📚 FAISS Vector Engine</span>
             <span class="hero-badge">🔬 MiniLM Semantic Embeddings</span>
             <span class="hero-badge">📑 Multi-Document RAG</span>
@@ -231,6 +255,20 @@ st.markdown(
 
 # ---------------- SIDEBAR: DOCUMENT & PIPELINE MANAGER ----------------
 with st.sidebar:
+    st.markdown("### 🤖 Model Settings")
+    selected_model = st.selectbox(
+        "Gemini Model",
+        options=[
+            "gemini-2.0-flash",
+            "gemini-1.5-flash",
+            "gemini-2.5-flash",
+            "gemini-3.5-flash"
+        ],
+        index=0,
+        help="gemini-2.0-flash and gemini-1.5-flash have a 1,500 requests/day free tier quota, preventing 429 rate limit errors."
+    )
+
+    st.markdown("---")
     st.markdown("### 📚 Document Management")
     st.caption("Upload clinical trials, meta-analyses, or healthcare AI research papers (PDF).")
 
@@ -351,8 +389,9 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### ⚙️ Architecture Specs")
     st.markdown(
-        """
-        - **LLM**: Gemini Flash (T=0)
+        f"""
+        - **LLM**: `{selected_model}` (T=0)
+        - **Fallback**: Auto-resilience (1,500 req/day)
         - **Embedding**: `all-MiniLM-L6-v2`
         - **Chunking**: 1500 chars (overlap 300)
         - **Retrieval**: FAISS Dense Index
@@ -437,11 +476,12 @@ with tabs[0]:
             submit_qa = st.form_submit_button("🔍 Get Research Answer", type="primary", use_container_width=True)
 
         if submit_qa and question:
-            with st.spinner("Searching indexed research papers and synthesizing answer..."):
-                docs = db.similarity_search(question, k=6)
-                context = "\n\n".join([d.page_content for d in docs])
+            try:
+                with st.spinner("Searching indexed research papers and synthesizing answer..."):
+                    docs = db.similarity_search(question, k=6)
+                    context = "\n\n".join([d.page_content for d in docs])
 
-                prompt = f"""
+                    prompt = f"""
 You are an AI Healthcare Research Assistant.
 
 Answer only from the given research paper context.
@@ -457,47 +497,52 @@ Context:
 Question:
 {question}
 """
-                response = llm.invoke(prompt)
-                answer = get_text(response)
+                    answer = generate_response(prompt, selected_model)
 
-                # Append to chat history
-                st.session_state.messages.append({
-                    "q": question,
-                    "a": answer,
-                    "sources": [
-                        {
-                            "source": doc.metadata.get("source", "Unknown"),
-                            "page": doc.metadata.get("page", 0) + 1,
-                            "content": doc.page_content[:280].strip()
-                        }
-                        for doc in docs
-                    ]
-                })
+                    # Append to chat history
+                    st.session_state.messages.append({
+                        "q": question,
+                        "a": answer,
+                        "sources": [
+                            {
+                                "source": doc.metadata.get("source", "Unknown"),
+                                "page": doc.metadata.get("page", 0) + 1,
+                                "content": doc.page_content[:280].strip()
+                            }
+                            for doc in docs
+                        ]
+                    })
 
-            st.markdown("#### 📋 Research Answer")
-            st.markdown(
-                f"""
-                <div class="response-card">
-                    {answer}
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
+                st.markdown("#### 📋 Research Answer")
+                st.markdown(
+                    f"""
+                    <div class="response-card">
+                        {answer}
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
 
-            # Sources Section
-            st.markdown("#### 📚 Retrieved Evidence & Sources")
-            for i, doc in enumerate(docs):
-                source_name = doc.metadata.get('source', 'Unknown Paper')
-                page_num = doc.metadata.get('page', 0) + 1
-                with st.expander(f"📄 Source {i+1}: {source_name} (Page {page_num})"):
-                    st.write(doc.page_content)
+                # Sources Section
+                st.markdown("#### 📚 Retrieved Evidence & Sources")
+                for i, doc in enumerate(docs):
+                    source_name = doc.metadata.get('source', 'Unknown Paper')
+                    page_num = doc.metadata.get('page', 0) + 1
+                    with st.expander(f"📄 Source {i+1}: {source_name} (Page {page_num})"):
+                        st.write(doc.page_content)
 
-            st.download_button(
-                label="📥 Download Answer & Sources (Markdown)",
-                data=f"# Research Q&A\n\n**Question:** {question}\n\n## Answer\n{answer}\n\n## Sources\n" + "\n".join([f"- **{d.metadata.get('source')}** (Page {d.metadata.get('page', 0)+1})\n> {d.page_content[:200]}..." for d in docs]),
-                file_name="healthcare_research_qa.md",
-                mime="text/markdown"
-            )
+                st.download_button(
+                    label="📥 Download Answer & Sources (Markdown)",
+                    data=f"# Research Q&A\n\n**Question:** {question}\n\n## Answer\n{answer}\n\n## Sources\n" + "\n".join([f"- **{d.metadata.get('source')}** (Page {d.metadata.get('page', 0)+1})\n> {d.page_content[:200]}..." for d in docs]),
+                    file_name="healthcare_research_qa.md",
+                    mime="text/markdown"
+                )
+            except Exception as e:
+                err_str = str(e)
+                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                    st.error("⏳ **Google Free Tier Quota Reached**: The free quota limit for this model was exceeded. Please wait a few moments or switch to **gemini-2.0-flash** or **gemini-1.5-flash** in the sidebar (which have 1,500 free requests per day).")
+                else:
+                    st.error(f"❌ An error occurred: {err_str}")
 
 
 # ========================================================
@@ -523,14 +568,15 @@ with tabs[1]:
             st.session_state.last_summary = None
 
         if summarize_btn:
-            with st.spinner("Extracting research dimensions across indexed literature..."):
-                docs = db.similarity_search(
-                    "objective dataset preprocessing model results conclusion",
-                    k=6
-                )
-                context = "\n\n".join([d.page_content for d in docs])
+            try:
+                with st.spinner("Extracting research dimensions across indexed literature..."):
+                    docs = db.similarity_search(
+                        "objective dataset preprocessing model results conclusion",
+                        k=6
+                    )
+                    context = "\n\n".join([d.page_content for d in docs])
 
-                prompt = f"""
+                    prompt = f"""
 Summarize these healthcare research papers.
 
 Include:
@@ -544,8 +590,13 @@ Include:
 Context:
 {context}
 """
-                result = llm.invoke(prompt)
-                st.session_state.last_summary = get_text(result)
+                    st.session_state.last_summary = generate_response(prompt, selected_model)
+            except Exception as e:
+                err_str = str(e)
+                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                    st.error("⏳ **Google Free Tier Quota Reached**: Please switch to **gemini-2.0-flash** or **gemini-1.5-flash** in the sidebar for 1,500 free requests/day.")
+                else:
+                    st.error(f"❌ An error occurred: {err_str}")
 
         if st.session_state.last_summary:
             st.markdown("#### 📊 Synthesis Report")
@@ -605,11 +656,12 @@ with tabs[2]:
             st.session_state.last_comparison = None
 
         if submit_compare and compare:
-            with st.spinner("Retrieving relevant literature across papers and conducting comparative analysis..."):
-                docs = db.similarity_search(compare, k=8)
-                context = "\n\n".join([d.page_content for d in docs])
+            try:
+                with st.spinner("Retrieving relevant literature across papers and conducting comparative analysis..."):
+                    docs = db.similarity_search(compare, k=8)
+                    context = "\n\n".join([d.page_content for d in docs])
 
-                prompt = f"""
+                    prompt = f"""
 Compare the research papers based on:
 
 - Dataset
@@ -625,8 +677,13 @@ Context:
 Question:
 {compare}
 """
-                result = llm.invoke(prompt)
-                st.session_state.last_comparison = get_text(result)
+                    st.session_state.last_comparison = generate_response(prompt, selected_model)
+            except Exception as e:
+                err_str = str(e)
+                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                    st.error("⏳ **Google Free Tier Quota Reached**: Please switch to **gemini-2.0-flash** or **gemini-1.5-flash** in the sidebar for 1,500 free requests/day.")
+                else:
+                    st.error(f"❌ An error occurred: {err_str}")
 
         if st.session_state.last_comparison:
             st.markdown("#### ⚖️ Comparative Findings")
@@ -686,8 +743,9 @@ with tabs[3]:
         st.session_state.last_term_explanation = None
 
     if submit_term and term:
-        with st.spinner("Generating structured explanation..."):
-            prompt = f"""
+        try:
+            with st.spinner("Generating structured explanation..."):
+                prompt = f"""
 Explain this term:
 
 {term}
@@ -697,8 +755,13 @@ Give:
 2. Technical definition
 3. Healthcare application
 """
-            result = llm.invoke(prompt)
-            st.session_state.last_term_explanation = get_text(result)
+                st.session_state.last_term_explanation = generate_response(prompt, selected_model)
+        except Exception as e:
+            err_str = str(e)
+            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                st.error("⏳ **Google Free Tier Quota Reached**: Please switch to **gemini-2.0-flash** or **gemini-1.5-flash** in the sidebar for 1,500 free requests/day.")
+            else:
+                st.error(f"❌ An error occurred: {err_str}")
 
     if st.session_state.last_term_explanation:
         st.markdown("#### 💡 Explanation Breakdown")
