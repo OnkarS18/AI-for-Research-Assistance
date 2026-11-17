@@ -159,7 +159,7 @@ def load_embeddings():
     )
 
 @st.cache_resource
-def load_llm(model_name="gemini-2.0-flash"):
+def load_llm(model_name="gemini-2.5-flash"):
     # Support both os.getenv and st.secrets (for Streamlit Cloud deployment)
     api_key = os.getenv("GOOGLE_API_KEY")
     if not api_key:
@@ -196,11 +196,12 @@ def get_text(response):
         return text
     return str(response.content)
 
-def generate_response(prompt, primary_model="gemini-2.0-flash"):
+def generate_response(prompt, primary_model="gemini-2.5-flash"):
     """
-    Invokes Gemini with automatic rate-limit (429) fallback across high-quota models.
+    Invokes Gemini with automatic fallback across models for both rate limits (429)
+    and deprecated/unavailable models (404).
     """
-    models_to_try = [primary_model, "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
+    models_to_try = [primary_model, "gemini-2.5-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
     seen = set()
     unique_models = [m for m in models_to_try if not (m in seen or seen.add(m))]
 
@@ -212,7 +213,7 @@ def generate_response(prompt, primary_model="gemini-2.0-flash"):
             return get_text(response)
         except Exception as e:
             err_text = str(e)
-            if "429" in err_text or "RESOURCE_EXHAUSTED" in err_text or "quota" in err_text.lower():
+            if any(k in err_text for k in ["429", "RESOURCE_EXHAUSTED", "404", "NOT_FOUND", "quota", "no longer available", "not available"]):
                 last_exception = e
                 continue
             else:
@@ -259,13 +260,13 @@ with st.sidebar:
     selected_model = st.selectbox(
         "Gemini Model",
         options=[
-            "gemini-2.0-flash",
-            "gemini-1.5-flash",
             "gemini-2.5-flash",
-            "gemini-3.5-flash"
+            "gemini-1.5-flash",
+            "gemini-1.5-pro",
+            "gemini-2.5-pro"
         ],
         index=0,
-        help="gemini-2.0-flash and gemini-1.5-flash have a 1,500 requests/day free tier quota, preventing 429 rate limit errors."
+        help="Google recommended models. gemini-2.5-flash and gemini-1.5-flash are active and fully supported."
     )
 
     st.markdown("---")
