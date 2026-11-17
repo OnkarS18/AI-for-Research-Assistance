@@ -159,7 +159,7 @@ def load_embeddings():
     )
 
 @st.cache_resource
-def load_llm(model_name="gemini-2.5-flash"):
+def load_llm(model_name="gemini-3.8-flash"):
     # Support both os.getenv and st.secrets (for Streamlit Cloud deployment)
     api_key = os.getenv("GOOGLE_API_KEY")
     if not api_key:
@@ -196,12 +196,12 @@ def get_text(response):
         return text
     return str(response.content)
 
-def generate_response(prompt, primary_model="gemini-2.5-flash"):
+def generate_response(prompt, primary_model="gemini-3.8-flash"):
     """
-    Invokes Gemini with automatic fallback across models for both rate limits (429)
+    Invokes Gemini with automatic fallback across active models for both rate limits (429)
     and deprecated/unavailable models (404).
     """
-    models_to_try = [primary_model, "gemini-2.5-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
+    models_to_try = [primary_model, "gemini-3.8-flash", "gemini-2.5-flash", "gemini-3.5-flash", "gemini-2.5-pro"]
     seen = set()
     unique_models = [m for m in models_to_try if not (m in seen or seen.add(m))]
 
@@ -260,13 +260,13 @@ with st.sidebar:
     selected_model = st.selectbox(
         "Gemini Model",
         options=[
+            "gemini-3.8-flash",
             "gemini-2.5-flash",
-            "gemini-1.5-flash",
-            "gemini-1.5-pro",
+            "gemini-3.5-flash",
             "gemini-2.5-pro"
         ],
         index=0,
-        help="Google recommended models. gemini-2.5-flash and gemini-1.5-flash are active and fully supported."
+        help="Google recommended models. gemini-3.8-flash is the latest high-performance model."
     )
 
     st.markdown("---")
@@ -541,7 +541,7 @@ Question:
             except Exception as e:
                 err_str = str(e)
                 if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                    st.error("⏳ **Google Free Tier Quota Reached**: The free quota limit for this model was exceeded. Please wait a few moments or switch to **gemini-2.0-flash** or **gemini-1.5-flash** in the sidebar (which have 1,500 free requests per day).")
+                    st.error("⏳ **Google Free Tier Quota Reached**: The free quota limit for this model was exceeded. Please wait a few moments or switch to **gemini-3.8-flash** or **gemini-2.5-flash** in the sidebar.")
                 else:
                     st.error(f"❌ An error occurred: {err_str}")
 
@@ -595,7 +595,7 @@ Context:
             except Exception as e:
                 err_str = str(e)
                 if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                    st.error("⏳ **Google Free Tier Quota Reached**: Please switch to **gemini-2.0-flash** or **gemini-1.5-flash** in the sidebar for 1,500 free requests/day.")
+                    st.error("⏳ **Google Free Tier Quota Reached**: Please switch to another model in the sidebar (e.g. **gemini-3.8-flash** or **gemini-2.5-flash**).")
                 else:
                     st.error(f"❌ An error occurred: {err_str}")
 
@@ -682,7 +682,7 @@ Question:
             except Exception as e:
                 err_str = str(e)
                 if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                    st.error("⏳ **Google Free Tier Quota Reached**: Please switch to **gemini-2.0-flash** or **gemini-1.5-flash** in the sidebar for 1,500 free requests/day.")
+                    st.error("⏳ **Google Free Tier Quota Reached**: Please switch to another model in the sidebar (e.g. **gemini-3.8-flash** or **gemini-2.5-flash**).")
                 else:
                     st.error(f"❌ An error occurred: {err_str}")
 
@@ -760,7 +760,7 @@ Give:
         except Exception as e:
             err_str = str(e)
             if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                st.error("⏳ **Google Free Tier Quota Reached**: Please switch to **gemini-2.0-flash** or **gemini-1.5-flash** in the sidebar for 1,500 free requests/day.")
+                st.error("⏳ **Google Free Tier Quota Reached**: Please switch to another model in the sidebar (e.g. **gemini-3.8-flash** or **gemini-2.5-flash**).")
             else:
                 st.error(f"❌ An error occurred: {err_str}")
 
