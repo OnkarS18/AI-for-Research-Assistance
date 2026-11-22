@@ -152,6 +152,47 @@ st.markdown(
 )
 
 # ---------------- MODELS SETUP ----------------
+def get_groq_api_key():
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key:
+        try:
+            api_key = st.secrets.get("GROQ_API_KEY", None)
+        except Exception:
+            pass
+    if not api_key and "groq_api_key_input" in st.session_state:
+        api_key = st.session_state.get("groq_api_key_input", None)
+    return api_key
+
+def invoke_groq(prompt, model_name="openai/gpt-oss-120b"):
+    api_key = get_groq_api_key()
+    if not api_key:
+        raise ValueError("Groq API Key not found. Please add GROQ_API_KEY to Streamlit Secrets or enter it in the sidebar.")
+    try:
+        from langchain_groq import ChatGroq
+        llm = ChatGroq(model=model_name, groq_api_key=api_key, temperature=0)
+        res = llm.invoke(prompt)
+        return get_text(res)
+    except Exception:
+        import urllib.request
+        import json
+        payload = json.dumps({
+            "model": model_name,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            "https://api.groq.com/openai/v1/chat/completions",
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "User-Agent": "MediResearchApp/1.0"
+            }
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return data["choices"][0]["message"]["content"]
+
 @st.cache_resource
 def load_embeddings():
     return HuggingFaceEmbeddings(
@@ -196,14 +237,29 @@ def get_text(response):
         return text
     return str(response.content)
 
-def generate_response(prompt, primary_model="gemini-3.8-flash"):
+def generate_response(prompt, primary_model="Groq: openai/gpt-oss-120b (Default - Ultra Fast)"):
     """
-    Invokes Gemini with automatic fallback across active models for both rate limits (429)
-    and deprecated/unavailable models (404).
+    Invokes Groq (default ultra-fast) or Gemini with resilient automatic fallback.
     """
-    models_to_try = [primary_model, "gemini-3.8-flash", "gemini-2.5-flash", "gemini-3.5-flash", "gemini-2.5-pro"]
+    # 1. Check if Groq model selected
+    if "groq" in primary_model.lower() or "gpt-oss" in primary_model.lower():
+        groq_model = "openai/gpt-oss-120b"
+        if "20b" in primary_model.lower():
+            groq_model = "openai/gpt-oss-20b"
+        try:
+            return invoke_groq(prompt, model_name=groq_model)
+        except Exception:
+            try:
+                alt_model = "openai/gpt-oss-20b" if groq_model == "openai/gpt-oss-120b" else "openai/gpt-oss-120b"
+                return invoke_groq(prompt, model_name=alt_model)
+            except Exception:
+                pass  # Fall through to Gemini
+
+    # 2. Gemini models
+    clean_gemini = primary_model.replace("Google: ", "").split(" ")[0]
+    gemini_candidates = [clean_gemini, "gemini-3.8-flash", "gemini-2.5-flash", "gemini-3.5-flash"]
     seen = set()
-    unique_models = [m for m in models_to_try if not (m in seen or seen.add(m))]
+    unique_models = [m for m in gemini_candidates if not (m in seen or seen.add(m))]
 
     last_exception = None
     for model_name in unique_models:
@@ -243,7 +299,8 @@ st.markdown(
             Evidence-based clinical literature analysis, cross-paper synthesis, and RAG-powered querying.
         </div>
         <div class="hero-badges">
-            <span class="hero-badge">⚡ Gemini 2.0 Flash LLM</span>
+            <span class="hero-badge">⚡ Groq LPU Powered</span>
+            <span class="hero-badge">🧠 Google Gemini</span>
             <span class="hero-badge">📚 FAISS Vector Engine</span>
             <span class="hero-badge">🔬 MiniLM Semantic Embeddings</span>
             <span class="hero-badge">📑 Multi-Document RAG</span>
@@ -256,18 +313,29 @@ st.markdown(
 
 # ---------------- SIDEBAR: DOCUMENT & PIPELINE MANAGER ----------------
 with st.sidebar:
-    st.markdown("### 🤖 Model Settings")
+    st.markdown("### 🤖 Reasoning Engine")
     selected_model = st.selectbox(
-        "Gemini Model",
+        "Active Model",
         options=[
-            "gemini-3.8-flash",
-            "gemini-2.5-flash",
-            "gemini-3.5-flash",
-            "gemini-2.5-pro"
+            "Groq: openai/gpt-oss-120b (Default - Ultra Fast)",
+            "Groq: openai/gpt-oss-20b (High Speed)",
+            "Google: gemini-3.8-flash",
+            "Google: gemini-2.5-flash",
+            "Google: gemini-3.5-flash",
+            "Google: gemini-2.5-pro",
         ],
         index=0,
-        help="Google recommended models. gemini-3.8-flash is the latest high-performance model."
+        help="Groq LPU delivers sub-second responses with high throughput using your API key. Gemini models are also available."
     )
+
+    if "groq" in selected_model.lower() and not get_groq_api_key():
+        st.text_input(
+            "🔑 Enter Groq API Key:",
+            type="password",
+            placeholder="gsk_...",
+            key="groq_api_key_input",
+            help="Add GROQ_API_KEY to Streamlit Secrets or enter it here."
+        )
 
     st.markdown("---")
     st.markdown("### 📚 Document Management")
