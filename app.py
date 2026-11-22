@@ -163,10 +163,21 @@ def get_groq_api_key():
         api_key = st.session_state.get("groq_api_key_input", None)
     return api_key
 
+def get_gemini_api_key():
+    api_key = os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        try:
+            api_key = st.secrets.get("GOOGLE_API_KEY", None)
+        except Exception:
+            pass
+    if not api_key and "gemini_api_key_input" in st.session_state:
+        api_key = st.session_state.get("gemini_api_key_input", None)
+    return api_key
+
 def invoke_groq(prompt, model_name="openai/gpt-oss-120b"):
     api_key = get_groq_api_key()
     if not api_key:
-        raise ValueError("Groq API Key not found. Please add GROQ_API_KEY to Streamlit Secrets or enter it in the sidebar.")
+        raise ValueError("Groq API Key not found. Please provide your Groq key.")
     try:
         from langchain_groq import ChatGroq
         llm = ChatGroq(model=model_name, groq_api_key=api_key, temperature=0)
@@ -200,14 +211,9 @@ def load_embeddings():
     )
 
 @st.cache_resource
-def load_llm(model_name="gemini-3.8-flash"):
-    # Support both os.getenv and st.secrets (for Streamlit Cloud deployment)
-    api_key = os.getenv("GOOGLE_API_KEY")
+def load_llm(model_name="gemini-3.8-flash", api_key=None):
     if not api_key:
-        try:
-            api_key = st.secrets.get("GOOGLE_API_KEY", None)
-        except Exception:
-            pass
+        api_key = get_gemini_api_key()
 
     if api_key:
         return ChatGoogleGenerativeAI(
@@ -311,8 +317,97 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# ---------------- API KEYS CONFIGURATION GATE ----------------
+current_gemini = get_gemini_api_key()
+current_groq = get_groq_api_key()
+
+if not current_gemini or not current_groq:
+    st.markdown(
+        """
+        <div style="background: rgba(14, 116, 144, 0.07); border: 2px solid #0e7490; border-radius: 14px; padding: 22px; margin-bottom: 24px;">
+            <h3 style="color: #0e7490; margin-top: 0; display: flex; align-items: center; gap: 8px;">
+                🔑 API Configuration Required
+            </h3>
+            <p style="color: #334155; font-size: 0.95rem; margin-bottom: 0;">
+                To unlock the <b>AI Healthcare Research Assistant</b>, please provide both your <b>Google Gemini</b> and <b>Groq LPU</b> API keys below.
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    with st.form("api_key_onboarding_form"):
+        col_k1, col_k2 = st.columns(2)
+        with col_k1:
+            st.markdown("#### 1. Google Gemini API Key")
+            st.caption("Required for clinical reasoning & cross-paper synthesis.")
+            input_gemini = st.text_input(
+                "Google Gemini Key",
+                type="password",
+                value=current_gemini or "",
+                placeholder="AIzaSy...",
+                help="Get your free key from aistudio.google.com/app/apikey"
+            )
+        with col_k2:
+            st.markdown("#### 2. Groq LPU API Key")
+            st.caption("Required for sub-second lightning fast Q&A.")
+            input_groq = st.text_input(
+                "Groq API Key",
+                type="password",
+                value=current_groq or "",
+                placeholder="gsk_...",
+                help="Get your free key from console.groq.com/keys"
+            )
+
+        submit_keys = st.form_submit_button("🚀 Save Keys & Unlock Assistant", type="primary", use_container_width=True)
+
+        if submit_keys:
+            if input_gemini:
+                st.session_state["gemini_api_key_input"] = input_gemini.strip()
+            if input_groq:
+                st.session_state["groq_api_key_input"] = input_groq.strip()
+
+            if not input_gemini and not input_groq:
+                st.error("❌ Please provide at least one API key to proceed.")
+            else:
+                st.success("✅ Keys saved! Initializing assistant...")
+                st.rerun()
+
+    col_g1, col_g2 = st.columns(2)
+    with col_g1:
+        with st.container(border=True):
+            st.markdown("**🌐 How to get your free Gemini Key:**")
+            st.markdown("1. Open [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)\n2. Sign in with Google\n3. Click **Create API key**\n4. Paste it above")
+    with col_g2:
+        with st.container(border=True):
+            st.markdown("**⚡ How to get your free Groq Key:**")
+            st.markdown("1. Open [console.groq.com/keys](https://console.groq.com/keys)\n2. Sign in or create free account\n3. Click **Create API Key**\n4. Paste it above")
+
+    st.stop()
+
 # ---------------- SIDEBAR: DOCUMENT & PIPELINE MANAGER ----------------
 with st.sidebar:
+    st.markdown("### 🔐 API Keys Status")
+    c_gem = "🟢 Active" if get_gemini_api_key() else "🔴 Missing"
+    c_grq = "🟢 Active" if get_groq_api_key() else "🔴 Missing"
+    col_s1, col_s2 = st.columns(2)
+    with col_s1:
+        st.caption(f"**Gemini:** {c_gem}")
+    with col_s2:
+        st.caption(f"**Groq:** {c_grq}")
+
+    with st.expander("⚙️ Edit / Change API Keys", expanded=False):
+        new_gem = st.text_input("Gemini Key", type="password", value=get_gemini_api_key() or "", key="sb_gemini_edit")
+        new_grq = st.text_input("Groq Key", type="password", value=get_groq_api_key() or "", key="sb_groq_edit")
+        if st.button("Update Keys", use_container_width=True):
+            if new_gem:
+                st.session_state["gemini_api_key_input"] = new_gem.strip()
+            if new_grq:
+                st.session_state["groq_api_key_input"] = new_grq.strip()
+            st.success("API keys updated!")
+            st.rerun()
+
+    st.markdown("---")
     st.markdown("### 🤖 Reasoning Engine")
     selected_model = st.selectbox(
         "Active Model",
@@ -327,15 +422,6 @@ with st.sidebar:
         index=0,
         help="Groq LPU delivers sub-second responses with high throughput using your API key. Gemini models are also available."
     )
-
-    if "groq" in selected_model.lower() and not get_groq_api_key():
-        st.text_input(
-            "🔑 Enter Groq API Key:",
-            type="password",
-            placeholder="gsk_...",
-            key="groq_api_key_input",
-            help="Add GROQ_API_KEY to Streamlit Secrets or enter it here."
-        )
 
     st.markdown("---")
     st.markdown("### 📚 Document Management")
